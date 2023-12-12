@@ -1,0 +1,853 @@
+---
+title: "STATS209Final"
+author: "Allie Cemalovic"
+date: "2023-12-08"
+output: html_document
+---
+#Load Data and Libraries
+```{r Load Data}
+library(DOS2)
+library(optmatch)
+library(RItools)
+library(plyr)
+library(rcbalance)
+library(ggplot2)
+resume<-read.csv("C:/Users/Allie Cemalovic/OneDrive - Stanford/Documents/STATS 209 Intro to Causal Inference/STATS 209 Final Project/dataset/resume.csv")
+```
+
+#Helper Functions
+```{r Helper FUnctions}
+## Helper functions from TA
+#edited to have flexible z name
+## puts the results of a pair match in a nice form
+## Usage: summarize.match(dataset,pairmatch_output)
+summarize.matchz <- function(dat, ms, z="z", ps.name="prop", keep.mset=FALSE) {
+  adat <- dat
+  adat$mset <- ms
+  adat <- adat[!is.na(adat$mset),]
+  adat.treat <- adat[adat[[z]]==1, ]
+  adat.ctrl <- adat[adat[[z]]==0, ]
+  
+  adat.m <- merge(adat.treat, adat.ctrl, by="mset", suffixes=c(".1", ".0"))
+  
+  if(!keep.mset) {
+    adat.m <- adat.m[, -which(names(adat.m) %in% c(paste0(z,".1"), paste0(z,".0"), "mset"))]
+  } else {
+    adat.m <- adat.m[, -which(names(adat.m) %in% c(paste0(z,".1"), paste0(z,".0")))]        
+  }
+  adat.m <- adat.m[, sort(names(adat.m), index.return=TRUE)$ix]
+  
+  p0.name <- paste0(ps.name,".", 0)
+  p1.name <- paste0(ps.name,".",1)
+  
+  adat.m.tmp.1 <- adat.m[, -which(names(adat.m) %in% c(p0.name, p1.name))]
+  adat.m.tmp.2 <- adat.m[, c(p0.name, p1.name)]
+  
+  adat.m <- cbind(adat.m.tmp.1, adat.m.tmp.2)
+  
+  return(adat.m)
+}
+
+ms.transform <- function(dat.arg, ms.rcbal) {
+    ctrl <- seq(sum(dat.arg$z==0))
+    matched.ctrl <- ms.rcbal
+    unmatched.ctrl <- setdiff(ctrl,ms.rcbal)
+    
+    dat.tmp <- dat.arg
+    dat.tmp$foo <- NA
+    dat.tmp$foo[dat.tmp$z==1] <- matched.ctrl
+    dat.tmp$foo[dat.tmp$z==0][matched.ctrl] <- matched.ctrl
+
+    return(dat.tmp$foo)    
+}
+
+#I made these!
+
+#this one gets the p-value for FRT Sharp Null (for this dataset)
+get.FRTp<- function(rm) {
+  rm.a<- rm
+  library(magrittr)
+  rm.a %<>% mutate(received_callback.diff = received_callback.1-received_callback.0)
+  permute <- function(){
+  signs = sample(c(+1,-1), size=nrow(rm.a), replace=TRUE)
+  return (mean(signs*rm.a$received_callback.diff))
+  }
+  permuted.test.stats <- replicate(10000, permute())
+  obs.test.stat <- mean(rm.a$received_callback.diff)
+  return((p.val <- mean(permuted.test.stats >= obs.test.stat)))
+}
+
+```
+
+# race ATE + Variance function
+```{r}
+race.unbiasATE<- function(dat,rm,z){
+  
+  rm.a<-rm
+  adat<-dat
+  adat$za<- adat[[z]]
+  #adat$x<- adat[[x1]]
+  
+library(dplyr)
+# estimate tau m
+tau_m <- mean(rm.a$received_callback.1-rm.a$received_callback.0)
+
+# estimate and fit models for mu 0 and mu 1
+mu_0_hat <- lm(received_callback ~ fem + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(adat,za==0))
+
+mu_1_hat <- lm(received_callback ~ fem + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(adat,za==1))
+
+rm.a$mu_0_hat.1 <- predict(mu_0_hat, transmute(rm.a,fem=fem.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.a$mu_1_hat.1 <- predict(mu_1_hat, transmute(rm.a,fem=fem.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.a$mu_0_hat.0 <- predict(mu_0_hat, transmute(rm.a,fem=fem.0, high_quality= high_quality.0, has_email_address=has_email_address.0, employment_holes=employment_holes.0, military=military.0, volunteer=volunteer.0, special_skills=special_skills.0, computer_skills=computer_skills.0, years_experience=years_experience.0, worked_during_school=worked_during_school.0, honors=honors.0, college_degree=college_degree.0,  years_college=years_college.0, job_city=job_city.0, job_equal_opp_employer=job_equal_opp_employer.0, job_req_any=job_req_any.0, job_req_education=job_req_education.0, job_req_computer=job_req_computer.0, job_req_organization=job_req_organization.0, job_exp_satisfied=job_exp_satisfied.0, job_exp_not_listed=job_exp_not_listed.0, job_is_fed=job_is_fed.0, job_req_college=job_req_college.0, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.0, job_industry_manufacturing= job_industry_manufacturing.0, job_industry_other_service= job_industry_other_service.0, job_industry_transportation_communication= job_industry_transportation_communication.0, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.0, job_type_manager=job_type_manager.0, job_type_retail_sales= job_type_retail_sales.0, job_type_sales_rep= job_type_sales_rep.0, job_type_secretary=job_type_secretary.0, job_type_supervisor=job_type_supervisor.0, job_ownership_public=job_ownership_public.0, job_ownership_private= job_ownership_private.0, job_ownership_unknown=job_ownership_unknown.0))
+
+# estimate bias
+rm.a$bias <- rm.a$mu_0_hat.1 - rm.a$mu_0_hat.0
+bias <- mean(rm.a$bias)
+return(cat("ATE",tau_mbc <- tau_m - bias,"\nVariance",tau_mbc_var <- (1/nrow(rm.a)^2)*sum((rm.a$received_callback.1-rm.a$mu_1_hat.1)^2
++ (rm.a$received_callback.0-rm.a$mu_0_hat.0)^2)))
+}
+```
+
+# resume quality ATE + Variance function
+#for binaried subsets only (gender or race)
+```{r}
+binqual.unbiasATE<- function(dat,rm,z,x1){
+  
+  rm.a<-rm
+  adat<-dat
+  adat$za<- adat[[z]]
+  adat$xa<- adat[[x1]]
+  
+library(dplyr)
+# estimate tau m
+tau_m <- mean(rm.a$received_callback.1-rm.a$received_callback.0)
+
+# estimate and fit models for mu 0 and mu 1
+mu_0_hat <- lm(received_callback ~ xa + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(adat,za==0))
+
+mu_1_hat <- lm(received_callback ~ xa + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(adat,za==1))
+
+rm.a$mu_0_hat.1 <- predict(mu_0_hat, transmute(rm.a, xa=!!sym(paste0(x1, ".1")), has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.a$mu_1_hat.1 <- predict(mu_1_hat, transmute(rm.a,xa=!!sym(paste0(x1, ".1")), has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.a$mu_0_hat.0 <- predict(mu_0_hat, transmute(rm.a,xa=!!sym(paste0(x1, ".0")), has_email_address=has_email_address.0, employment_holes=employment_holes.0, military=military.0, volunteer=volunteer.0, special_skills=special_skills.0, computer_skills=computer_skills.0, years_experience=years_experience.0, worked_during_school=worked_during_school.0, honors=honors.0, college_degree=college_degree.0,  years_college=years_college.0, job_city=job_city.0, job_equal_opp_employer=job_equal_opp_employer.0, job_req_any=job_req_any.0, job_req_education=job_req_education.0, job_req_computer=job_req_computer.0, job_req_organization=job_req_organization.0, job_exp_satisfied=job_exp_satisfied.0, job_exp_not_listed=job_exp_not_listed.0, job_is_fed=job_is_fed.0, job_req_college=job_req_college.0, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.0, job_industry_manufacturing= job_industry_manufacturing.0, job_industry_other_service= job_industry_other_service.0, job_industry_transportation_communication= job_industry_transportation_communication.0, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.0, job_type_manager=job_type_manager.0, job_type_retail_sales= job_type_retail_sales.0, job_type_sales_rep= job_type_sales_rep.0, job_type_secretary=job_type_secretary.0, job_type_supervisor=job_type_supervisor.0, job_ownership_public=job_ownership_public.0, job_ownership_private= job_ownership_private.0, job_ownership_unknown=job_ownership_unknown.0))
+
+# estimate bias
+rm.a$bias <- rm.a$mu_0_hat.1 - rm.a$mu_0_hat.0
+bias <- mean(rm.a$bias)
+return(cat("ATE",tau_mbc <- tau_m - bias,"\nVariance",tau_mbc_var <- (1/nrow(rm.a)^2)*sum((rm.a$received_callback.1-rm.a$mu_1_hat.1)^2
++ (rm.a$received_callback.0-rm.a$mu_0_hat.0)^2)))
+}
+```
+
+# resume quality ATE + Variance function
+#for dual identity subsets only (gender + race)
+```{r}
+dqual.unbiasATE<- function(dat,rm,z){
+  
+  rm.a<-rm
+  adat<-dat
+  adat$za<- adat[[z]]
+  
+library(dplyr)
+# estimate tau m
+tau_m <- mean(rm.a$received_callback.1-rm.a$received_callback.0)
+
+# estimate and fit models for mu 0 and mu 1
+mu_0_hat <- lm(received_callback ~ has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(adat,za==0))
+
+mu_1_hat <- lm(received_callback ~ has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(adat,za==1))
+
+rm.a$mu_0_hat.1 <- predict(mu_0_hat, transmute(rm.a, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.a$mu_1_hat.1 <- predict(mu_1_hat, transmute(rm.a, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.a$mu_0_hat.0 <- predict(mu_0_hat, transmute(rm.a, has_email_address=has_email_address.0, employment_holes=employment_holes.0, military=military.0, volunteer=volunteer.0, special_skills=special_skills.0, computer_skills=computer_skills.0, years_experience=years_experience.0, worked_during_school=worked_during_school.0, honors=honors.0, college_degree=college_degree.0,  years_college=years_college.0, job_city=job_city.0, job_equal_opp_employer=job_equal_opp_employer.0, job_req_any=job_req_any.0, job_req_education=job_req_education.0, job_req_computer=job_req_computer.0, job_req_organization=job_req_organization.0, job_exp_satisfied=job_exp_satisfied.0, job_exp_not_listed=job_exp_not_listed.0, job_is_fed=job_is_fed.0, job_req_college=job_req_college.0, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.0, job_industry_manufacturing= job_industry_manufacturing.0, job_industry_other_service= job_industry_other_service.0, job_industry_transportation_communication= job_industry_transportation_communication.0, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.0, job_type_manager=job_type_manager.0, job_type_retail_sales= job_type_retail_sales.0, job_type_sales_rep= job_type_sales_rep.0, job_type_secretary=job_type_secretary.0, job_type_supervisor=job_type_supervisor.0, job_ownership_public=job_ownership_public.0, job_ownership_private= job_ownership_private.0, job_ownership_unknown=job_ownership_unknown.0))
+
+# estimate bias
+rm.a$bias <- rm.a$mu_0_hat.1 - rm.a$mu_0_hat.0
+bias <- mean(rm.a$bias)
+return(cat("ATE",tau_mbc <- tau_m - bias,"\nVariance",tau_mbc_var <- (1/nrow(rm.a)^2)*sum((rm.a$received_callback.1-rm.a$mu_1_hat.1)^2
++ (rm.a$received_callback.0-rm.a$mu_0_hat.0)^2)))
+}
+```
+
+
+#Start EDA
+```{r fig.height=8, fig.width=5}
+#summary(resume)
+
+#What is the (artificial) distribution of high and low quality resumes across gender and race?
+
+ggplot(data=resume, aes(x=as.factor(resume_quality),group = race, fill = race)) + geom_bar(stat = "count", width = 0.5, position = "dodge")+ facet_grid(.~gender) + theme_bw()
+
+#there are a lot more, like over 3x female resumes than male resumes. Race and quality are about evenly distributed. Seems like many variables are evenly distributed for race.
+
+#MAYBE TAKE FEMALES ONLY TO LOOK AT RESUME ATTRIBUTES MATCHING?
+
+# New facet label names for fem variable
+fem.labs <- c("Woman", "Man")
+names(fem.labs) <- c("f", "m")
+
+ggplot(data=resume, aes(x=as.factor(job_type),group = race, fill = race)) + geom_bar(stat = "count", width = 0.5, position = "dodge")+ facet_grid(.~gender,labeller = as_labeller(fem.labs))+ labs(x = "Job Type") + theme_bw()+ theme(axis.text.x = element_text(size = 10,angle=90), legend.position="bottom")
+#years of college not evenly distributed between M&F, higher proportion of men have 4 yr degree
+#What the hell is going on here with gendered job types? The secretary position for women is off the charts while men barely applied
+#higher proportion of women without college degree
+#much higher proportion of women have computer skills
+#number of men volunteering or not was about even, but there are significantly less women volunteers, about 65% from eyeballing
+#higher proportion of women were not military.
+#it was about 50/50 for women to have employment holes, whereas only about 30% of men did, from eyeballing
+
+
+ggplot(data=resume, aes(x=years_experience, group=as.factor(gender), 
+                          fill=as.factor(gender))) + geom_density(alpha=0.5) + theme_bw()+labs(x="Years of Experience")
+#higher density of super experienced (18+ yrs) and unexperienced (2 years) men compared to women whereas race almost completely aligns in distribution density
+
+ggplot(data=resume, aes(x=as.factor(job_city),group = race, fill = race)) + geom_bar(stat = "count", width = 0.5, position = "dodge") + facet_grid(.~gender) + theme_bw()+ theme(axis.text.x = element_text(size = 10, angle=90))
+#weirdly, a lot higher proportion of men in Boston and reverse for women (higher in Chicago)
+
+#really strange industry distribution in addition to job type distribution
+#potential direction would be to stratify by industry or job type to find gender differences?
+
+x_ind<-c(0,1,2,3,4,5)
+female<-c(sum(resume$job_industry == "business_and_personal_service" & resume$gender == "f"),sum(resume$job_industry == "finance_insurance_real_estate" & resume$gender == "f"),sum(resume$job_industry == "manufacturing" & resume$gender == "f"),sum(resume$job_industry == "other_service" & resume$gender == "f"),sum(resume$job_industry == "transportation_communication" & resume$gender == "f"),sum(resume$job_industry == "wholesale_and_retail_trade" & resume$gender == "f"))/nrow(resume[resume$gender == "f",])
+male<-c(sum(resume$job_industry == "business_and_personal_service" & resume$gender == "m"),sum(resume$job_industry == "finance_insurance_real_estate" & resume$gender == "m"),sum(resume$job_industry == "manufacturing" & resume$gender == "m"),sum(resume$job_industry == "other_service" & resume$gender == "m"),sum(resume$job_industry == "transportation_communication" & resume$gender == "m"),sum(resume$job_industry == "wholesale_and_retail_trade" & resume$gender == "m"))/nrow(resume[resume$gender == "m",])
+data_ind<-data.frame(x_ind,female,male)
+library(reshape)
+meltedm<-melt(data_ind, id="x_ind")
+print(ggplot(meltedm,aes(x=x_ind,y=value,fill=variable)) + 
+        geom_bar(stat="identity",position = "dodge", alpha=.5)+ theme_bw()+labs(y="proportion",x="Industry")+ theme(axis.text.x = element_text(size = 6.5, angle=90))+ scale_x_continuous(breaks=0:5,labels=c("business_and_personal_service","finance_insurance_real_estate","manufacturing","other_service","transportation_communication","wholesale_and_retail_trade")))
+```
+
+#Extra graph for Gendered Job Types
+```{r fig.height=8, fig.width=5}
+x_ind<-c(0,1,2,3,4,5)
+female<-c(sum(resume$job_type == "clerical" & resume$gender == "f"),sum(resume$job_type == "manager" & resume$gender == "f"),sum(resume$job_type == "retail_sales" & resume$gender == "f"),sum(resume$job_type == "sales_rep" & resume$gender == "f"),sum(resume$job_type == "secretary" & resume$gender == "f"),sum(resume$job_type == "supervisor" & resume$gender == "f"))/nrow(resume[resume$gender == "f",])
+male<-c(sum(resume$job_type == "clerical" & resume$gender == "m"),sum(resume$job_type == "manager" & resume$gender == "m"),sum(resume$job_type == "retail_sales" & resume$gender == "m"),sum(resume$job_type == "sales_rep" & resume$gender == "m"),sum(resume$job_type == "secretary" & resume$gender == "m"),sum(resume$job_type == "supervisor" & resume$gender == "m"))/nrow(resume[resume$gender == "m",])
+data_ind<-data.frame(x_ind,female,male)
+library(reshape)
+meltedm<-melt(data_ind, id="x_ind")
+print(ggplot(meltedm,aes(x=x_ind,y=value,fill=variable)) + 
+        geom_bar(stat="identity",position = "dodge", alpha=.5) + theme_bw()+labs(y="proportion of gender sample",x="Job Type")+ theme(axis.text.x = element_text(size = 10, angle=90), legend.position="top")+  scale_x_continuous(breaks=0:5,labels=c("clerical","manager","retail_sales","sales_rep","secretary","supervisor")))
+```
+
+
+#Data Cleaning
+```{r Data Cleaning}
+#create variables to replace job_req_min_experience bc very incomplete and may cause collinearity with the experience listed on resume
+#meet or exceed experience requirement column.
+#need to replace "some" with a number:
+#mean(resume[resume$job_req_min_experience=="some","years_experience"])
+#returns 7.5 so let's use 5 years for "some"
+resume$job_req_min_experience<-ifelse((resume$job_req_min_experience)=="some",5, resume$job_req_min_experience)
+resume$job_req_min_experience<-as.numeric(resume$job_req_min_experience)
+#1 if resume experience satisfies the listed requirement. 0 if not. Blank is assumed to equal 0 years so any experience would satisfy a blank requirement.
+resume$job_exp_satisfied<-ifelse((resume$job_req_min_experience)<=(resume$years_experience), 1, 0)
+resume$job_exp_satisfied<-ifelse(is.na(resume$job_req_min_experience)==TRUE, 1, resume$job_exp_satisfied)
+
+#no experience requirement listed column. 
+#1 if no experience requirement was listed (aka min experience was blank). 0 if anything was listed.
+resume$job_exp_not_listed<-ifelse(is.na(resume$job_req_min_experience)==TRUE, 1, 0)
+
+#see the new variables together:
+#resume[c("job_req_min_experience","years_experience", "job_exp_satisfied","job_exp_not_listed")]
+
+#job_fed_contractor also has hella NA
+#split into dummies
+#job is federal =1, else =0
+resume$job_is_fed<-ifelse((resume$job_fed_contractor)==1, 1, 0)
+resume$job_is_fed<-ifelse(is.na(resume$job_fed_contractor)==TRUE, 0, resume$job_is_fed)
+#job is not federal =1, else =0
+resume$job_not_fed<-ifelse((resume$job_fed_contractor)==0, 1, 0)
+resume$job_not_fed<-ifelse(is.na(resume$job_fed_contractor)==TRUE, 0, resume$job_not_fed)
+
+#job_req_school might want to separate out into dummies, maybe simplify to college/ no college
+# 1= college or some college is required; 0= not listed or high school
+resume$job_req_college<-ifelse((resume$job_req_school)=="college"|(resume$job_req_school)=="some_college", 1, 0)
+
+#can change race and gender to binary variable
+resume$black<- ifelse((resume$race)=="black", 1, 0)
+resume$fem<- ifelse((resume$gender)=="f", 1, 0)
+
+#change resume_quality to binary
+#1=high, 0= low
+resume$high_quality<- ifelse((resume$resume_quality)=="high", 1, 0)
+
+#change job_city to binary
+#1= Chicago, 0= Boston
+resume$job_city<- ifelse((resume$job_city)=="Chicago", 1, 0)
+
+library("fastDummies")
+#change job_industry and job_type to dummies, removing one to avoid collinearity
+resume<-fastDummies::dummy_cols(resume, select_columns = c("job_industry","job_type","job_ownership"), remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+
+#remove original columns
+resume<-subset(resume,select=-c(job_fed_contractor,job_req_min_experience,job_req_school,gender,race,firstname, resume_quality))
+
+head(resume)
+
+```
+
+#Correlation Matrix
+```{r fig.height=16, fig.width=20}
+#install.packages("corrplot")
+
+resume_cand<-subset(resume, select=-c(job_ad_id))
+res <- cor(resume_cand)
+library(corrplot)
+corrplot(res, type = "upper", order = "hclust",tl.col = "black")
+#notice how black doesn't correlate with anything but gender does (mildly)
+```
+
+#Calculate Propensity Scores
+```{r Propensity Scores}
+#might try propensity scores including & excluding job application variables alongside candidate resume variables
+
+# estimate propensity score by race (resume variables only)
+resume$black_propr <- glm(black ~ fem + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college, family=binomial, data=resume)$fitted.values
+summary(resume$black_propr)
+
+#estimate propensity score by race (all variables except job_ad_id)
+resume$black_propall <- glm(black ~ fem + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown, family=binomial, data=resume)$fitted.values
+summary(resume$black_propall)
+
+# estimate propensity score by gender (resume variables only)
+resume$fem_propr <- glm(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college, family=binomial, data=resume)$fitted.values
+summary(resume$fem_propr)
+
+#estimate propensity score by gender (all variables except job_ad_id)
+resume$fem_propall <- glm(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown, family=binomial, data=resume)$fitted.values
+summary(resume$fem_propall)
+
+(head(resume))
+
+#the race propensity scores seem extremely similar, so can just use propall but gender is different enough to maybe warrant 2 analyses (one with each type of propensity score)
+
+#the propensity scores show that the covariates for race are pretty well randomized (mean=0.50) without much variation. Gender propensity score shows a higher proportion of women in addition to more severe non-randomness, especially when the job description comes into play
+
+#might try exact matching on job_ad_id?
+```
+#Subset the data to eliminate fem-dominant jobs
+```{r}
+fnond<-subset(resume, job_type_retail_sales == 1 | job_type_sales_rep == 1 | job_type_manager == 1 | job_type_supervisor == 1, select=-c(job_type_supervisor,job_type_secretary))
+#remove columns that are 0 for all observations or would cause collinearity
+```
+
+#Compare balance unstratified
+```{r fig.height=16, fig.width=10}
+#race as treatment
+plot(xBalance(black ~ fem + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown -1, 
+              strata=list(unstrat=NULL),
+              data=resume))
+#gender as treatment
+plot(xBalance(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown -1, 
+              strata=list(unstrat=NULL),
+              data=resume))
+#these scales are on completely different orders of magnitude. Race is pretty balanced and gender is a huge mess
+```
+
+
+
+
+#Start matching for race
+```{r}
+## match on all variables (exclude propensity score)
+#mat.all <- smahal(resume$black, resume[,c("fem", "high_quality", "has_email_address", "employment_holes","military", "volunteer", "special_skills", "computer_skills", "years_experience", "worked_during_school", "honors", "college_degree", "years_college", "job_city","job_equal_opp_employer","job_req_any","job_req_education", "job_req_computer", "job_req_organization","job_exp_satisfied","job_exp_not_listed","job_is_fed","job_req_college","job_industry_finance_insurance_real_estate","job_industry_manufacturing", "job_industry_other_service","job_industry_transportation_communication", "job_industry_wholesale_and_retail_trade", "job_type_manager","job_type_retail_sales", "job_type_sales_rep","job_type_secretary","job_type_supervisor", "job_ownership_public", "job_ownership_private", "job_ownership_unknown")]) 
+
+#this was way too many variables so the code isn't working. Instead, let's match on gender + resume quality, then propensity caliper
+mat.fq <- smahal(resume$black, resume[,c("fem", "high_quality")])
+ms.fq <- pairmatch(mat.fq, data=resume)
+# check groups (more readable)
+#print(ms.fq, grouped = TRUE)
+
+## add a propensity score caliper penalty
+mat.cfq <- addcaliper(mat.fq, z=resume$black, p=resume$black_propall, caliper=0.1)
+ms.cfq <- pairmatch(mat.cfq, data=resume)
+# summarize the group
+rm.cfq <- summarize.matchz(resume, ms.cfq, z="black", ps.name="black_propall", keep.mset=FALSE)
+head(rm.cfq)
+
+#the balance is unchanged without exact matching or caliper (all individuals are included)
+#NO DIFFERENCE in matches when caliper for gender propensity score instead of race prop.
+```
+#add exact matching gender
+```{r}
+#add exact matching for gender
+mat.exactf <- addalmostexact(mat.cfq, z=resume$black, f=resume$fem, mult=10) 
+ms.exactf <- pairmatch(mat.exactf, data=resume)
+
+# summarize the group
+rm.exactf <- summarize.matchz(resume, ms.exactf, z="black", ps.name="black_propall", keep.mset=FALSE)
+head(rm.exactf)
+
+# check balance
+plot(xBalance(black ~ fem + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown -1, strata=list(ms.cfq=~ms.cfq,ms.exactf=~ms.exactf), data=resume),ggplot = TRUE)
+#ms.cfq is the caliper matched set, and ms.exactf is the caliper with exact matching for gender. 
+
+cat("Average absolute difference in gender propensity scores:", mean(abs(rm.exactf$fem_propall.1-rm.exactf$fem_propall.0)))
+cat("Average absolute difference in race propensity scores:", mean(abs(rm.exactf$black_propall.1-rm.exactf$black_propall.0)))
+
+#Because race is so well randomized, you end up having a lot of pairs of women and pairs of men in this matched set. And exact matching doesn't really change anything because it's already almost exactly matched. Pretty much the same thing happens for resume quality exact matching. No exact matching (cfq) actually has slightly better (though negligible) average absolute differences.
+```
+
+#compute FRT p-value for race matched by quality and gender + propensity caliper
+```{r FRT p}
+(1-get.FRTp(rm.cfq))
+#had to switch 0 and 1 so that it would be the difference in white minus black
+#probably because of the way p.val is calculated (assumes positive ATE)
+#the FRT p-value is 0.
+```
+#compute bias-corrected ATE for race matched by quality and gender + propensity caliper
+```{r ATE}
+race.unbiasATE(resume,rm.cfq, "black")
+```
+#see exact match on gender just in case
+```{r FRT p}
+(1-get.FRTp(rm.exactf))
+#had to switch 0 and 1 so that it would be the difference in white minus black
+#probably because of the way p.val is calculated (assumes positive ATE)
+#the FRT p-value is 0.
+race.unbiasATE(resume,rm.exactf, "black")
+
+#results are exactly the same as without exact matching
+```
+
+#Start matching for gender
+```{r fig.height=8, fig.width=5}
+
+#Let's match on race + resume quality, then gender propensity caliper
+mat.rq <- smahal(resume$fem, resume[,c("black", "high_quality")])
+ms.rq <- pairmatch(mat.rq, data=resume)
+# check groups (more readable)
+#print(ms.rq, grouped = TRUE)
+
+## add a propensity score caliper penalty
+mat.crq <- addcaliper(mat.rq, z=resume$fem, p=resume$fem_propall, caliper=0.1)
+ms.crq <- pairmatch(mat.crq, data=resume)
+# summarize the group
+rm.crq <- summarize.matchz(resume, ms.crq, z="fem", ps.name="fem_propall", keep.mset=FALSE)
+head(rm.crq)
+
+# check balance
+plot(xBalance(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown + fem_propall + fem_propr + black_propall -1, strata=list(unstrat=NULL,ms.crq=~ms.crq,ms.rq=~ms.rq), data=resume),ggplot = TRUE)+ theme(legend.position="top")
+#overall the variables become much more balanced when matching on gender and quality and adding the fem propensity score makes a huge difference.
+```
+
+#add exact match for race just in case
+```{r fig.height=8, fig.width=5}
+#add exact matching for race
+mat.exactr <- addalmostexact(mat.crq, z=resume$fem, f=resume$black, mult=10) 
+ms.exactr <- pairmatch(mat.exactr, data=resume)
+
+# summarize the group
+rm.exactr <- summarize.matchz(resume, ms.exactr, z="fem", ps.name="fem_propall", keep.mset=FALSE)
+head(rm.exactr)
+
+# check balance
+plot(xBalance(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown + fem_propall + fem_propr -1, strata=list(unstrat=NULL,ms.rq=~ms.rq,ms.exactr=~ms.exactr), data=resume),ggplot = TRUE)+ theme(legend.position="top")
+#ms.crq is the caliper matched set, and ms.exactr is the caliper with exact matching for race. 
+
+cat("Average absolute difference in gender propensity scores:", mean(abs(rm.exactr$fem_propall.1-rm.exactr$fem_propall.0)))
+cat("\nAverage absolute difference in race propensity scores:", mean(abs(rm.exactr$black_propall.1-rm.exactr$black_propall.0)))
+
+cat("\nAverage absolute difference in gender propensity scores:", mean(abs(rm.crq$fem_propall.1-rm.crq$fem_propall.0)))
+cat("\nAverage absolute difference in race propensity scores:", mean(abs(rm.crq$black_propall.1-rm.crq$black_propall.0)))
+
+#the matches are a little worse in some categories when race is matched exactly (particularly for jobs that require organization) but I think it's essential to match race exactly for this analysis, to show that it is not contributing to the gendered effect.
+```
+
+#compute FRT p-value for gender matched by quality and race + propensity caliper
+```{r FRT p}
+library(magrittr)
+rm.exactr %<>% mutate(received_callback.diff = received_callback.0-received_callback.1)
+#had to switch 0 and 1 so that it would be the difference in white minus black
+#probably because of the way p.val is calculated (assumes positive ATE)
+permute <- function(){
+signs = sample(c(+1,-1), size=nrow(rm.exactr), replace=TRUE)
+return (mean(signs*rm.exactr$received_callback.diff))
+}
+permuted.test.stats <- replicate(10000, permute())
+obs.test.stat <- mean(rm.exactr$received_callback.diff)
+(p.val <- mean(permuted.test.stats >= obs.test.stat))
+#the FRT p-value is 0.465.
+```
+#compute bias-corrected ATE for gender matched by quality and race + propensity caliper
+```{r ATE}
+library(dplyr)
+# estimate tau m
+tau_m <- mean(rm.exactr$received_callback.1-rm.exactr$received_callback.0)
+
+# estimate and fit models for mu 0 and mu 1
+mu_0_hat <- lm(received_callback ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(resume,fem==0))
+
+mu_1_hat <- lm(received_callback ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(resume,fem==1))
+
+rm.exactr$mu_0_hat.1 <- predict(mu_0_hat, transmute(rm.exactr,black=black.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.exactr$mu_1_hat.1 <- predict(mu_1_hat, transmute(rm.exactr,black=black.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.exactr$mu_0_hat.0 <- predict(mu_0_hat, transmute(rm.exactr,black=black.0, high_quality= high_quality.0, has_email_address=has_email_address.0, employment_holes=employment_holes.0, military=military.0, volunteer=volunteer.0, special_skills=special_skills.0, computer_skills=computer_skills.0, years_experience=years_experience.0, worked_during_school=worked_during_school.0, honors=honors.0, college_degree=college_degree.0,  years_college=years_college.0, job_city=job_city.0, job_equal_opp_employer=job_equal_opp_employer.0, job_req_any=job_req_any.0, job_req_education=job_req_education.0, job_req_computer=job_req_computer.0, job_req_organization=job_req_organization.0, job_exp_satisfied=job_exp_satisfied.0, job_exp_not_listed=job_exp_not_listed.0, job_is_fed=job_is_fed.0, job_req_college=job_req_college.0, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.0, job_industry_manufacturing= job_industry_manufacturing.0, job_industry_other_service= job_industry_other_service.0, job_industry_transportation_communication= job_industry_transportation_communication.0, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.0, job_type_manager=job_type_manager.0, job_type_retail_sales= job_type_retail_sales.0, job_type_sales_rep= job_type_sales_rep.0, job_type_secretary=job_type_secretary.0, job_type_supervisor=job_type_supervisor.0, job_ownership_public=job_ownership_public.0, job_ownership_private= job_ownership_private.0, job_ownership_unknown=job_ownership_unknown.0))
+
+# estimate bias
+rm.exactr$bias <- rm.exactr$mu_0_hat.1 - rm.exactr$mu_0_hat.0
+bias <- mean(rm.exactr$bias)
+(tau_mbc <- tau_m - bias)
+#the effect is next to nothing and insignificant
+#what this is saying is : when women apply to feminine jobs, their gender doesn't make a difference for whether they get a callback or not! (Men are just as likely to get a callback)
+#next, I want to subset to take out the "secretary" and "clerical" roles which are heavily dominated by women.
+```
+#estimate Variance 
+```{r Var}
+# estimate variance (k=m=1)
+(tau_mbc_var <- (1/nrow(rm.exactr)^2)*sum((rm.exactr$received_callback.1-rm.exactr$mu_1_hat.1)^2
++ (rm.exactr$received_callback.0-rm.exactr$mu_0_hat.0)^2))
+```
+
+
+
+
+#Start matching for gender with non-fem-dominant job type SUBSET
+```{r Matching for gender SUBSET}
+
+rownames(fnond) <- 1:nrow(fnond) #reindex fnond to avoid error in pairmatch
+
+#Let's match on race + resume quality, then gender propensity caliper
+mat.rq <- smahal(fnond$fem, fnond[,c("black", "high_quality")])
+ms.rq <- pairmatch(mat.rq, data=fnond)
+# check groups (more readable)
+#print(ms.rq, grouped = TRUE)
+
+## add a propensity score caliper penalty
+mat.crq <- addcaliper(mat.rq, z=fnond$fem, p=fnond$fem_propall, caliper=0.1)
+ms.crq <- pairmatch(mat.crq, data=fnond)
+# summarize the group
+rm.crq <- summarize.matchz(fnond, ms.crq, z="fem", ps.name="fem_propall", keep.mset=FALSE)
+head(rm.crq)
+
+# check balance
+plot(xBalance(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_ownership_public + job_ownership_private + job_ownership_unknown + fem_propall + fem_propr + black_propall -1, strata=list(unstrat=NULL,ms.crq=~ms.crq,ms.rq=~ms.rq), data=fnond),ggplot = TRUE)
+#once again, the caliper reigns supreme
+```
+#add exact match for race in SUBSET
+```{r}
+#add exact matching for race
+mat.exactr <- addalmostexact(mat.crq, z=fnond$fem, f=fnond$black, mult=10) 
+ms.exactr <- pairmatch(mat.exactr, data=fnond)
+
+# summarize the group
+rm.exactr <- summarize.matchz(fnond, ms.exactr, z="fem", ps.name="fem_propall", keep.mset=FALSE)
+head(rm.exactr)
+
+# check balance
+plot(xBalance(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_ownership_public + job_ownership_private + job_ownership_unknown + fem_propall + fem_propr -1, strata=list(ms.crq=~ms.crq,ms.exactr=~ms.exactr), data=fnond),ggplot = TRUE)
+#ms.cfq is the caliper matched set, and ms.exactf is the caliper with exact matching for gender. 
+
+cat("Average absolute difference in gender propensity scores:", mean(abs(rm.exactr$fem_propall.1-rm.exactr$fem_propall.0)))
+cat("\nAverage absolute difference in race propensity scores:", mean(abs(rm.exactr$black_propall.1-rm.exactr$black_propall.0)))
+
+cat("\nAverage absolute difference in gender propensity scores:", mean(abs(rm.crq$fem_propall.1-rm.crq$fem_propall.0)))
+cat("\nAverage absolute difference in race propensity scores:", mean(abs(rm.crq$black_propall.1-rm.crq$black_propall.0)))
+
+#the matches are a little worse in some categories when race is matched exactly (particularly for jobs that require organization) but I think it's essential to match race exactly for this analysis, to show that it is not contributing to the gendered effect.
+```
+
+
+
+
+#compute FRT p-value for SUBSET gender matched by quality and race + propensity caliper
+```{r FRT p}
+library(magrittr)
+rm.exactr %<>% mutate(received_callback.diff = received_callback.0-received_callback.1)
+#had to switch 0 and 1 so that it would be the difference in male minus female
+#probably because of the way p.val is calculated (assumes positive ATE)
+permute <- function(){
+signs = sample(c(+1,-1), size=nrow(rm.exactr), replace=TRUE)
+return (mean(signs*rm.exactr$received_callback.diff))
+}
+permuted.test.stats <- replicate(10000, permute())
+obs.test.stat <- mean(rm.exactr$received_callback.diff)
+(p.val <- mean(permuted.test.stats >= obs.test.stat))
+#the FRT p-value is 0.465.
+```
+#compute bias-corrected ATE for SUBSET gender matched by quality and race + propensity caliper
+```{r ATE}
+library(dplyr)
+# estimate tau m
+tau_m <- mean(rm.exactr$received_callback.1-rm.exactr$received_callback.0)
+
+# estimate and fit models for mu 0 and mu 1
+mu_0_hat <- lm(received_callback ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(fnond,fem==0))
+
+mu_1_hat <- lm(received_callback ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(fnond,fem==1))
+
+rm.exactr$mu_0_hat.1 <- predict(mu_0_hat, transmute(rm.exactr,black=black.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.exactr$mu_1_hat.1 <- predict(mu_1_hat, transmute(rm.exactr,black=black.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.exactr$mu_0_hat.0 <- predict(mu_0_hat, transmute(rm.exactr,black=black.0, high_quality= high_quality.0, has_email_address=has_email_address.0, employment_holes=employment_holes.0, military=military.0, volunteer=volunteer.0, special_skills=special_skills.0, computer_skills=computer_skills.0, years_experience=years_experience.0, worked_during_school=worked_during_school.0, honors=honors.0, college_degree=college_degree.0,  years_college=years_college.0, job_city=job_city.0, job_equal_opp_employer=job_equal_opp_employer.0, job_req_any=job_req_any.0, job_req_education=job_req_education.0, job_req_computer=job_req_computer.0, job_req_organization=job_req_organization.0, job_exp_satisfied=job_exp_satisfied.0, job_exp_not_listed=job_exp_not_listed.0, job_is_fed=job_is_fed.0, job_req_college=job_req_college.0, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.0, job_industry_manufacturing= job_industry_manufacturing.0, job_industry_other_service= job_industry_other_service.0, job_industry_transportation_communication= job_industry_transportation_communication.0, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.0, job_type_manager=job_type_manager.0, job_type_retail_sales= job_type_retail_sales.0, job_type_sales_rep= job_type_sales_rep.0, job_ownership_public=job_ownership_public.0, job_ownership_private= job_ownership_private.0, job_ownership_unknown=job_ownership_unknown.0))
+
+# estimate bias
+rm.exactr$bias <- rm.exactr$mu_0_hat.1 - rm.exactr$mu_0_hat.0
+bias <- mean(rm.exactr$bias)
+(tau_mbc <- tau_m - bias)
+#the effect is next to nothing and insignificant
+#what this is saying is : when women apply to feminine jobs, their gender doesn't make a difference for whether they get a callback or not! (Men are just as likely to get a callback)
+#next, I want to subset to take out the "secretary" and "clerical" roles which are heavily dominated by women.
+```
+#estimate Variance 
+```{r Var}
+# estimate variance (k=m=1)
+(tau_mbc_var <- (1/nrow(rm.exactr)^2)*sum((rm.exactr$received_callback.1-rm.exactr$mu_1_hat.1)^2
++ (rm.exactr$received_callback.0-rm.exactr$mu_0_hat.0)^2))
+```
+##JOB AD ID
+
+#add exact match for job ad ID in SUBSET already exact matched for race
+```{r}
+#add exact matching for race
+mat.exactrji <- addalmostexact(mat.exactr, z=fnond$fem, f=fnond$job_ad_id, mult=10) 
+ms.exactrji <- pairmatch(mat.exactrji, data=fnond)
+
+# summarize the group
+rm.exactrji <- summarize.matchz(fnond, ms.exactrji, z="fem", ps.name="fem_propall", keep.mset=FALSE)
+head(rm.exactrji)
+
+# check balance
+plot(xBalance(fem ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_ownership_public + job_ownership_private + job_ownership_unknown + fem_propall + fem_propr -1, strata=list(ms.exactrji=~ms.exactrji,ms.exactr=~ms.exactr), data=fnond),ggplot = TRUE)
+#ms.exactrji is exact matched for job ID + race, and ms.exactr is the caliper with exact matching for race only. 
+
+cat("Average absolute difference in gender propensity scores:", mean(abs(rm.exactr$fem_propall.1-rm.exactr$fem_propall.0)))
+cat("\nAverage absolute difference in race propensity scores:", mean(abs(rm.exactr$black_propall.1-rm.exactr$black_propall.0)))
+
+cat("Average absolute difference in gender propensity scores:", mean(abs(rm.exactrji$fem_propall.1-rm.exactrji$fem_propall.0)))
+cat("\nAverage absolute difference in race propensity scores:", mean(abs(rm.exactrji$black_propall.1-rm.exactrji$black_propall.0)))
+
+#the matches are a lot worse in some categories when race is matched exactly (particularly for jobs that require organization) but I think it's essential to match race exactly for this analysis, to show that it is not contributing to the gendered effect.
+```
+
+#compute FRT p-value for JOB AD ID, SUBSET gender matched by quality and race + propensity caliper
+```{r FRT p}
+library(magrittr)
+rm.exactrji %<>% mutate(received_callback.diff = received_callback.0-received_callback.1)
+permute <- function(){
+signs = sample(c(+1,-1), size=nrow(rm.exactrji), replace=TRUE)
+return (mean(signs*rm.exactrji$received_callback.diff))
+}
+permuted.test.stats <- replicate(10000, permute())
+obs.test.stat <- mean(rm.exactrji$received_callback.diff)
+(p.val <- mean(permuted.test.stats >= obs.test.stat))
+#the FRT p-value is 0.465.
+```
+#compute bias-corrected ATE for SUBSET gender matched by quality and race + propensity caliper
+```{r ATE}
+library(dplyr)
+# estimate tau m
+tau_m <- mean(rm.exactrji$received_callback.1-rm.exactrji$received_callback.0)
+
+# estimate and fit models for mu 0 and mu 1
+mu_0_hat <- lm(received_callback ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(fnond,fem==0))
+
+mu_1_hat <- lm(received_callback ~ black + high_quality + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(fnond,fem==1))
+
+rm.exactrji$mu_0_hat.1 <- predict(mu_0_hat, transmute(rm.exactrji,black=black.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.exactrji$mu_1_hat.1 <- predict(mu_1_hat, transmute(rm.exactrji,black=black.1, high_quality= high_quality.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.exactrji$mu_0_hat.0 <- predict(mu_0_hat, transmute(rm.exactrji,black=black.0, high_quality= high_quality.0, has_email_address=has_email_address.0, employment_holes=employment_holes.0, military=military.0, volunteer=volunteer.0, special_skills=special_skills.0, computer_skills=computer_skills.0, years_experience=years_experience.0, worked_during_school=worked_during_school.0, honors=honors.0, college_degree=college_degree.0,  years_college=years_college.0, job_city=job_city.0, job_equal_opp_employer=job_equal_opp_employer.0, job_req_any=job_req_any.0, job_req_education=job_req_education.0, job_req_computer=job_req_computer.0, job_req_organization=job_req_organization.0, job_exp_satisfied=job_exp_satisfied.0, job_exp_not_listed=job_exp_not_listed.0, job_is_fed=job_is_fed.0, job_req_college=job_req_college.0, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.0, job_industry_manufacturing= job_industry_manufacturing.0, job_industry_other_service= job_industry_other_service.0, job_industry_transportation_communication= job_industry_transportation_communication.0, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.0, job_type_manager=job_type_manager.0, job_type_retail_sales= job_type_retail_sales.0, job_type_sales_rep= job_type_sales_rep.0, job_ownership_public=job_ownership_public.0, job_ownership_private= job_ownership_private.0, job_ownership_unknown=job_ownership_unknown.0))
+
+# estimate bias
+rm.exactrji$bias <- rm.exactrji$mu_0_hat.1 - rm.exactrji$mu_0_hat.0
+bias <- mean(rm.exactrji$bias)
+(tau_mbc <- tau_m - bias)
+#the effect is next to nothing and insignificant
+#what this is saying is : when women apply to feminine jobs, their gender doesn't make a difference for whether they get a callback or not! (Men are just as likely to get a callback)
+#next, I want to subset to take out the "secretary" and "clerical" roles which are heavily dominated by women.
+```
+#estimate Variance 
+```{r Var}
+# estimate variance (k=m=1)
+(tau_mbc_var <- (1/nrow(rm.exactrji)^2)*sum((rm.exactrji$received_callback.1-rm.exactrji$mu_1_hat.1)^2
++ (rm.exactrji$received_callback.0-rm.exactrji$mu_0_hat.0)^2))
+```
+
+
+#What about resume quality effect?
+##match by race + gender
+#Start matching for quality
+```{r}
+## Let's match on gender + race
+#resume quality is approx evenly distributed across race and gender so no worries about propensity caliper
+mat.gr <- smahal(resume$high_quality, resume[,c("fem", "black")])
+ms.gr <- pairmatch(mat.gr, data=resume)
+
+# summarize the group
+rm.gr <- summarize.matchz(resume, ms.gr, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+head(rm.gr)
+
+#check blanace
+#took out has_email_address and volunteer because huge OUTLIERS for differences
+plot(xBalance(high_quality ~ black + fem + employment_holes + military + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown -1, 
+              strata=list(unstrat=NULL,ms.gr=~ms.gr),
+              data=resume),ggplot=TRUE)
+#very slight improvements to balance, almost nonexistent. But let's roll with it. This is already exact matched for race and gender
+```
+
+#compute FRT p-value for quality matched by race and gender
+```{r FRT p}
+get.FRTp(rm.gr)
+```
+#compute bias-corrected ATE for quality matched by race and gender
+```{r ATE}
+library(dplyr)
+# estimate tau m
+tau_m <- mean(rm.gr$received_callback.1-rm.gr$received_callback.0)
+
+# estimate and fit models for mu 0 and mu 1
+mu_0_hat <- lm(received_callback ~ fem + black + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(resume,high_quality==0))
+
+mu_1_hat <- lm(received_callback ~ fem + black + has_email_address + employment_holes + military + volunteer + special_skills + computer_skills + years_experience + worked_during_school + honors + college_degree + years_college + job_city +job_equal_opp_employer + job_req_any + job_req_education + job_req_computer + job_req_organization + job_exp_satisfied + job_exp_not_listed + job_is_fed + job_req_college + job_industry_finance_insurance_real_estate + job_industry_manufacturing + job_industry_other_service + job_industry_transportation_communication + job_industry_wholesale_and_retail_trade + job_type_manager + job_type_retail_sales + job_type_sales_rep + job_type_secretary + job_type_supervisor + job_ownership_public + job_ownership_private + job_ownership_unknown,
+data=filter(resume,high_quality==1))
+
+rm.gr$mu_0_hat.1 <- predict(mu_0_hat, transmute(rm.gr,fem=fem.1, black= black.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.gr$mu_1_hat.1 <- predict(mu_1_hat, transmute(rm.gr,fem=fem.1, black= black.1, has_email_address=has_email_address.1, employment_holes=employment_holes.1, military=military.1, volunteer=volunteer.1, special_skills=special_skills.1, computer_skills=computer_skills.1, years_experience=years_experience.1, worked_during_school=worked_during_school.1, honors=honors.1, college_degree=college_degree.1,  years_college=years_college.1, job_city=job_city.1, job_equal_opp_employer=job_equal_opp_employer.1, job_req_any=job_req_any.1, job_req_education=job_req_education.1, job_req_computer=job_req_computer.1, job_req_organization=job_req_organization.1, job_exp_satisfied=job_exp_satisfied.1, job_exp_not_listed=job_exp_not_listed.1, job_is_fed=job_is_fed.1, job_req_college=job_req_college.1, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.1, job_industry_manufacturing= job_industry_manufacturing.1, job_industry_other_service= job_industry_other_service.1, job_industry_transportation_communication= job_industry_transportation_communication.1, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.1, job_type_manager=job_type_manager.1, job_type_retail_sales= job_type_retail_sales.1, job_type_sales_rep= job_type_sales_rep.1, job_type_secretary=job_type_secretary.1, job_type_supervisor=job_type_supervisor.1, job_ownership_public=job_ownership_public.1, job_ownership_private= job_ownership_private.1, job_ownership_unknown=job_ownership_unknown.1))
+
+rm.gr$mu_0_hat.0 <- predict(mu_0_hat, transmute(rm.gr,fem=fem.0, black= black.0, has_email_address=has_email_address.0, employment_holes=employment_holes.0, military=military.0, volunteer=volunteer.0, special_skills=special_skills.0, computer_skills=computer_skills.0, years_experience=years_experience.0, worked_during_school=worked_during_school.0, honors=honors.0, college_degree=college_degree.0,  years_college=years_college.0, job_city=job_city.0, job_equal_opp_employer=job_equal_opp_employer.0, job_req_any=job_req_any.0, job_req_education=job_req_education.0, job_req_computer=job_req_computer.0, job_req_organization=job_req_organization.0, job_exp_satisfied=job_exp_satisfied.0, job_exp_not_listed=job_exp_not_listed.0, job_is_fed=job_is_fed.0, job_req_college=job_req_college.0, job_industry_finance_insurance_real_estate= job_industry_finance_insurance_real_estate.0, job_industry_manufacturing= job_industry_manufacturing.0, job_industry_other_service= job_industry_other_service.0, job_industry_transportation_communication= job_industry_transportation_communication.0, job_industry_wholesale_and_retail_trade= job_industry_wholesale_and_retail_trade.0, job_type_manager=job_type_manager.0, job_type_retail_sales= job_type_retail_sales.0, job_type_sales_rep= job_type_sales_rep.0, job_type_secretary=job_type_secretary.0, job_type_supervisor=job_type_supervisor.0, job_ownership_public=job_ownership_public.0, job_ownership_private= job_ownership_private.0, job_ownership_unknown=job_ownership_unknown.0))
+
+# estimate bias
+rm.gr$bias <- rm.gr$mu_0_hat.1 - rm.gr$mu_0_hat.0
+bias <- mean(rm.gr$bias)
+(tau_mbc <- tau_m - bias)
+
+```
+#estimate Variance 
+```{r Var}
+# estimate variance (k=m=1)
+(tau_mbc_var <- (1/nrow(rm.gr)^2)*sum((rm.gr$received_callback.1-rm.gr$mu_1_hat.1)^2
++ (rm.gr$received_callback.0-rm.gr$mu_0_hat.0)^2))
+```
+#subset data into M/F and B/W
+```{r}
+resF<-subset(resume, fem == 1, select=-c(fem))
+resM<-subset(resume, fem == 0, select=-c(fem))
+resB<-subset(resume, black == 1, select=-c(black))
+resW<-subset(resume, black == 0, select=-c(black))
+#remove columns that are 0 for all observations or would cause collinearity
+
+#reindex to avoid error in pairmatch
+rownames(resF) <- 1:nrow(resF) 
+rownames(resM) <- 1:nrow(resM) 
+rownames(resB) <- 1:nrow(resB) 
+rownames(resW) <- 1:nrow(resW) 
+```
+
+#Start matching for quality
+```{r}
+## make matched subsets for F, M, B, W
+#chose to match on city too because I couldn't get the code to work without a second variable
+
+#length must equal rows
+mat.Fr <- smahal(resF$high_quality, resF[,c("black","job_city")])
+ms.Fr <- pairmatch(mat.Fr, data=resF)
+rm.Fr <- summarize.matchz(resF, ms.Fr, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+mat.Mr <- smahal(resM$high_quality, resM[,c("black","job_city")])
+ms.Mr <- pairmatch(mat.Mr, data=resM)
+rm.Mr <- summarize.matchz(resM, ms.Mr, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+mat.Bf <- smahal(resB$high_quality, resB[,c("fem","job_city")])
+ms.Bf <- pairmatch(mat.Bf, data=resB)
+rm.Bf <- summarize.matchz(resB, ms.Bf, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+mat.Wf <- smahal(resW$high_quality, resW[,c("fem","job_city")])
+ms.Wf <- pairmatch(mat.Wf, data=resW)
+rm.Wf <- summarize.matchz(resW, ms.Wf, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+```
+
+#subset data into dual identities
+```{r}
+resFB<-subset(resume, fem == 1 & black ==1, select=-c(fem, black))
+resMB<-subset(resume, fem == 0 & black ==1, select=-c(fem, black))
+resFW<-subset(resume, fem == 1 & black == 0, select=-c(fem, black))
+resMW<-subset(resume, fem == 0 & black == 0, select=-c(fem, black))
+#remove columns that are 0 for all observations or would cause collinearity
+
+#reindex to avoid error in pairmatch
+rownames(resFB) <- 1:nrow(resFB) 
+rownames(resMB) <- 1:nrow(resMB) 
+rownames(resFW) <- 1:nrow(resFW) 
+rownames(resMW) <- 1:nrow(resMW) 
+```
+
+#Start matching for quality
+```{r}
+## make matched subsets for FB, MB, FW, MW
+#chose to match on city and years of experience because I needed at least 2 variables
+
+#length must equal rows
+mat.FBr <- smahal(resFB$high_quality, resFB[,c("years_experience","job_city")])
+ms.FBr <- pairmatch(mat.FBr, data=resFB)
+rm.FBr <- summarize.matchz(resFB, ms.FBr, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+mat.MBr <- smahal(resMB$high_quality, resMB[,c("years_experience","job_city")])
+ms.MBr <- pairmatch(mat.MBr, data=resMB)
+rm.MBr <- summarize.matchz(resMB, ms.MBr, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+mat.FWr <- smahal(resFW$high_quality, resFW[,c("years_experience","job_city")])
+ms.FWr <- pairmatch(mat.FWr, data=resFW)
+rm.FWr <- summarize.matchz(resFW, ms.FWr, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+mat.MWf <- smahal(resMW$high_quality, resMW[,c("years_experience","job_city")])
+ms.MWf <- pairmatch(mat.MWf, data=resMW)
+rm.MWf <- summarize.matchz(resMW, ms.MWf, z="high_quality", ps.name="fem_propall", keep.mset=FALSE)
+
+```
+
+#see results
+```{r}
+cat("\nFemale","\np-value",get.FRTp(rm.Fr), "\n")
+binqual.unbiasATE(resF,rm.Fr,"high_quality", "black")
+
+cat("\n","\nMale","\np-value",get.FRTp(rm.Mr), "\n")
+binqual.unbiasATE(resM,rm.Mr,"high_quality", "black")
+
+cat("\n","\nBlack","\np-value",get.FRTp(rm.Bf), "\n")
+binqual.unbiasATE(resB,rm.Bf,"high_quality", "fem")
+
+cat("\n","\nWhite","\np-value",get.FRTp(rm.Wf), "\n")
+binqual.unbiasATE(resW,rm.Wf,"high_quality", "fem")
+
+cat("\n","\nBlack Woman","\np-value",get.FRTp(rm.FBr), "\n")
+dqual.unbiasATE(resFB,rm.FBr,"high_quality")
+
+cat("\n","\nBlack Man","\np-value",get.FRTp(rm.MBr), "\n")
+dqual.unbiasATE(resMB,rm.MBr,"high_quality")
+
+cat("\n","\nWhite Woman","\np-value",get.FRTp(rm.FWr), "\n")
+dqual.unbiasATE(resFW,rm.FWr,"high_quality")
+
+cat("\n","\nWhite Man","\np-value",get.FRTp(rm.MWf), "\n")
+dqual.unbiasATE(resMW,rm.MWf,"high_quality")
+
+#it looks like quality of resume only matter for white people and women? 
+#Specifically white women?
+```
+

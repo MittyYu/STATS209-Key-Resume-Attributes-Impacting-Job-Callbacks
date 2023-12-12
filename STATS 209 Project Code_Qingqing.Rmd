@@ -1,0 +1,197 @@
+---
+title: "Untitled"
+output: pdf_document
+---
+Encode gender and race
+Gender: Female 0 & male 1
+Race: Black 0 & white 1
+```{r}
+resume <- read.csv("/Users/anny/Desktop/resume.csv")
+resume$gender <- ifelse(resume$gender == "f", 0, 1)
+resume$race <- ifelse(resume$race == "black", 0, 1)
+```
+Count different callbacks in the industry for different group of people
+```{r}
+unique_values_in_job_industry <- unique(resume$job_industry)
+print(unique_values_in_job_industry)
+# First, make sure to load dplyr
+library(dplyr)
+
+# Define the industries of interest
+industries_of_interest <- c("manufacturing", "other_service", "wholesale_and_retail_trade",
+                            "business_and_personal_service", "finance_insurance_real_estate", 
+                            "transportation_communication")
+
+# Filter the dataset for the industries of interest and then count by race, gender, and industry
+resume_counts <- resume %>%
+  filter(job_industry %in% industries_of_interest) %>%
+  group_by(job_industry, race, gender) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# Filter the counts for the combinations of white female, white male, black female, black male
+resume_filtered_counts <- resume_counts %>%
+  filter((race == 1 & gender == 0) |
+         (race == 1 & gender == 1) |
+         (race == 0 & gender == 0) |
+         (race == 0 & gender == 1))
+
+# Print the result
+print(resume_filtered_counts)
+
+```
+```{r}
+resume_race_counts <- resume %>%
+  filter(race == 0 | race == 1) %>%
+  group_by(job_industry, race,received_callback) %>%
+  summarise(count = n(), .groups = 'drop')
+print(resume_race_counts)
+# Filter for gender
+resume_gender_counts <- resume %>%
+  filter(gender == 0 | gender == 1) %>%
+  group_by(job_industry, gender,received_callback) %>%
+  summarise(count = n(), .groups = 'drop')
+print(resume_gender_counts)
+```
+```{r}
+# Group by industry, race, and gender and count the number of entries
+group_counts <- resume %>%
+  group_by(job_industry, gender) %>%
+  summarise(total_count = n(), .groups = 'drop')
+callback_counts <- resume %>%
+  group_by(job_industry, gender) %>%
+  summarise(callback_count = sum(received_callback), .groups = 'drop')
+# Merge the total counts with the callback counts
+grouped_data <- merge(group_counts, callback_counts, by = c("job_industry", "gender"))
+# Calculate the proportion of callbacks
+grouped_data$callback_proportion <- grouped_data$callback_count / grouped_data$total_count
+print(grouped_data)
+
+# Group by industry, race, and gender and count the number of entries
+group_race_counts <- resume %>%
+  group_by(job_industry, race) %>%
+  summarise(total_count = n(), .groups = 'drop')
+callback_race_counts <- resume %>%
+  group_by(job_industry, race) %>%
+  summarise(callback_count = sum(received_callback), .groups = 'drop')
+# Merge the total counts with the callback counts
+grouped_race_data <- merge(group_race_counts, callback_race_counts, by = c("job_industry", "race"))
+# Calculate the proportion of callbacks
+grouped_race_data$callback_proportion <- grouped_race_data$callback_count / grouped_race_data$total_count
+print(grouped_race_data)
+```
+```{r}
+gender_perform_FRT <- function(data) {
+    observed_diff <- mean(data$received_callback[data$gender == 1]) - mean(data$received_callback[data$gender == 0])
+    permutation_diffs <- replicate(10000, {
+        shuffled_gender <- sample(data$gender)
+        mean(data$received_callback[shuffled_gender == 1]) - mean(data$received_callback[shuffled_gender == 0])
+    })
+    
+    p_value <- mean(abs(permutation_diffs) >= abs(observed_diff))
+    return(p_value)
+}
+
+race_perform_FRT <- function(data) {
+    observed_diff <- mean(data$received_callback[data$race == 1]) - mean(data$received_callback[data$race == 0])
+    permutation_diffs <- replicate(10000, {
+        shuffled_race <- sample(data$race)
+        mean(data$received_callback[shuffled_race == 1]) - mean(data$received_callback[shuffled_race == 0])
+    })
+    
+    p_value <- mean(abs(permutation_diffs) >= abs(observed_diff))
+    return(p_value)
+}
+
+```
+
+```{r}
+ #FRT for Gender across Industries
+results_gender <- resume %>%
+  split(.$job_industry) %>%
+  lapply(gender_perform_FRT)
+
+# FRT for Race across Industries
+results_race <- resume %>%
+  split(.$job_industry) %>%
+  lapply(race_perform_FRT)
+```
+```{r}
+print(results_gender)
+print(results_race)
+```
+
+
+```{r}
+industry_specific_analysis <- function(data, industry_name) {
+  ISWC <- data$received_callback[data$job_industry == industry_name & data$gender == 0]
+  ISMC <- data$received_callback[data$job_industry == industry_name & data$gender == 1]
+  tauHat <- mean(ISWC, na.rm = TRUE) - mean(ISMC, na.rm = TRUE)
+
+
+  vHat <- var(ISWC) / length(ISWC) + var(ISMC) / length(ISMC)
+
+  CIL <- tauHat - 1.96 * sqrt(vHat)
+  CIU <- tauHat + 1.96 * sqrt(vHat)
+
+  return(c(Treatment_Effect = tauHat, std = vHat,Lower_CI = CIL, Upper_CI = CIU))
+}
+
+# Test the function
+results_for_other_service <- industry_specific_analysis(resume, "other_service")
+print(results_for_other_service)
+
+```
+```{r}
+# Example of applying the function to one industry
+results_for_manufacturing <- industry_specific_analysis(resume, "manufacturing")
+print(results_for_manufacturing)
+
+results_for_business_and_personal_service <- industry_specific_analysis(resume, "business_and_personal_service")
+print(results_for_business_and_personal_service)
+
+results_for_wholesale_and_retail_trade <- industry_specific_analysis(resume, "wholesale_and_retail_trade")
+print(results_for_wholesale_and_retail_trade)
+
+results_for_finance_insurance_real_estate <- industry_specific_analysis(resume, "finance_insurance_real_estate")
+print(results_for_finance_insurance_real_estate)
+
+results_for_transportation_communication <- industry_specific_analysis(resume, "transportation_communication")
+print(results_for_transportation_communication)
+```
+
+
+```{r}
+industry_specific_race <- function(data, industry_name) {
+  ISWC <- data$received_callback[data$job_industry == industry_name & data$race == 0]
+  ISMC <- data$received_callback[data$job_industry == industry_name & data$race == 1]
+  tauHat <- mean(ISWC, na.rm = TRUE) - mean(ISMC, na.rm = TRUE)
+
+
+  vHat <- var(ISWC) / length(ISWC) + var(ISMC) / length(ISMC)
+
+  CIL <- tauHat - 1.96 * sqrt(vHat)
+  CIU <- tauHat + 1.96 * sqrt(vHat)
+
+  return(c(Treatment_Effect = tauHat, std = vHat,Lower_CI = CIL, Upper_CI = CIU))
+}
+
+
+# Example of applying the function to one industry
+results_for_other_service <- industry_specific_race(resume, "other_service")
+print(results_for_other_service)
+
+results_for_manufacturing <- industry_specific_race(resume, "manufacturing")
+print(results_for_manufacturing)
+
+results_for_business_and_personal_service <- industry_specific_race(resume, "business_and_personal_service")
+print(results_for_business_and_personal_service)
+
+results_for_wholesale_and_retail_trade <- industry_specific_race(resume, "wholesale_and_retail_trade")
+print(results_for_wholesale_and_retail_trade)
+
+results_for_finance_insurance_real_estate <- industry_specific_race(resume, "finance_insurance_real_estate")
+print(results_for_finance_insurance_real_estate)
+
+results_for_transportation_communication <- industry_specific_race(resume, "transportation_communication")
+print(results_for_transportation_communication)
+```

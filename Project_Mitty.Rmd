@@ -1,0 +1,571 @@
+---
+title: "STATS209 Final project"
+author: "Mitty Yu"
+date: "2023-11-16"
+output: pdf_document
+---
+
+```{r, loading data, message=FALSE}
+library(knitr) 
+library(readr)
+# read data
+resume <- read_csv("./resume.csv")
+set.seed(0)
+```
+
+There is a column: \`job_fed_contractor\`(I guess this is an indicator for whether this job is related to federal) --\> how can we process the na values in this column?
+
+make it 0, 1, missing
+
+```{r, preprocessing}
+# preproc
+resume$gender_numeric <- ifelse(resume$gender == "m", 1, 0)
+resume$race_numeric <- ifelse(resume$race == "white", 1, 0)
+
+# add a new treatment column: combine gender and race
+library(magrittr)
+library(dplyr)
+
+resume <- resume %>%
+  mutate(z = case_when(
+    race_numeric == 1 & gender_numeric == 1 ~ 0, # White Male
+    race_numeric == 1 & gender_numeric == 0 ~ 1, # White Female
+    race_numeric == 0 & gender_numeric == 1 ~ 2, # Black Male
+    race_numeric == 0 & gender_numeric == 0 ~ 3  # Black Female
+  ))
+```
+
+```{r}
+nF <- sum(resume$gender_numeric==0)
+nM <- sum(resume$gender_numeric==1)
+nB <- sum(resume$race_numeric==0)
+nW <- sum(resume$race_numeric==1)
+```
+
+### Helper functions
+
+```{r}
+calculate_p_values <- function(z, y, treat, control, MC = 10000) {
+  tauhat <- t.test(y[z == treat], y[z == control], var.equal = TRUE)$statistic
+  student <- t.test(y[z == treat], y[z == control], var.equal = FALSE)$statistic
+  W <- wilcox.test(y[z == treat], y[z == control])$statistic
+  D <- ks.test(y[z == treat], y[z == control])$statistic
+
+  # Running Monte Carlo for specified number of times
+  Tauhat <- rep(0, MC)
+  Student <- rep(0, MC)
+  Wilcox <- rep(0, MC)
+  Ks <- rep(0, MC)
+
+  # Ignore warning for Ks
+  suppressWarnings({
+    for(mc in 1:MC) {
+      zperm <- sample(z)
+      Tauhat[mc] <- t.test(y[zperm == treat], y[zperm == control], var.equal = TRUE)$statistic
+      Student[mc] <- t.test(y[zperm == treat], y[zperm == control], var.equal = FALSE)$statistic
+      Wilcox[mc] <- wilcox.test(y[zperm == treat], y[zperm == control])$statistic
+      Ks[mc] <- ks.test(y[zperm == treat], y[zperm == control])$statistic
+    }
+  })
+
+  exact.pv <- c(mean(Tauhat >= tauhat), mean(Student >= student), mean(Wilcox >= W), mean(Ks >= D))
+  
+  result <- list(
+    Tauhat = Tauhat,
+    Student = Student,
+    Wilcox = Wilcox,
+    Ks = Ks,
+    ExactPValues = exact.pv
+  )
+  
+  return(result)
+}
+
+
+plot_distribution <- function(df, Tauhat){
+  # Plotting the distribution of all four vectors
+  par(mfrow = c(2, 2))  # 2x2 layout for subplots
+  
+  for (col in colnames(df)) {
+    hist(df[[col]], main = col, xlab = "Tauhat", col = "lightblue", border = "black")
+  }
+}
+```
+
+# Gender
+
+We are interested in testing the following null hypothesis: $H_{0F}: Y_i(1) = Y_i(0)$ for all units $i = 1, \ldots, n$. The treatment $Z_i\in\{0 \text{ (female)}, 1\text{ (male)}\}$. There are four test statistics that we are interested in: difference-in-means, studentized statistic, Wilcoxon rank sum, and Kolmogorov-Smirnov statistic.
+
+```{r}
+z = resume$gender_numeric
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 1, 0)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+The p-values you obtained from the Fisher randomization test represent the probability of observing the test statistics (difference-in-means, studentized statistic, Wilcoxon rank sum, and Kolmogorov-Smirnov statistic) under the null hypothesis of no difference between groups. A higher p-value suggests weaker evidence against the null hypothesis.
+
+Let's interpret each p-value:
+
+1.  **Difference-in-Means** P-value: 0.816
+2.  **Studentized Statistic** P-value: 0.815
+3.  **Wilcoxon Rank Sum** P-value: 0.839
+4.  **Kolmogorov-Smirnov Statistic** P-value: 0.396
+
+In summary, all p-values are relatively high, indicating a lack of significant evidence to reject the null hypothesis in favor of a difference between groups. However, the Kolmogorov-Smirnov test has a lower p-value compared to the others, suggesting that it provides relatively stronger evidence against the null hypothesis compared to the other test statistics.
+
+```{r}
+gender_perform_FRT <- function(data) {
+    observed_diff <- mean(data$received_callback[data$gender_numeric == 1]) - mean(data$received_callback[data$gender_numeric == 0])
+    permutation_diffs <- replicate(10000, {
+        shuffled_gender <- sample(data$gender_numeric)
+        mean(data$received_callback[shuffled_gender == 1]) - mean(data$received_callback[shuffled_gender == 0])
+    })
+    
+    p_value <- mean(abs(permutation_diffs) >= abs(observed_diff))
+    return(p_value)
+}
+
+gender_perform_FRT(resume)
+```
+
+# Race
+
+```{r}
+race_perform_FRT <- function(data) {
+    observed_diff <- mean(data$received_callback[data$race_numeric == 1]) - mean(data$received_callback[data$race_numeric == 0])
+    permutation_diffs <- replicate(1000000, {
+        shuffled_race <- sample(data$race_numeric)
+        mean(data$received_callback[shuffled_race == 1]) - mean(data$received_callback[shuffled_race == 0])
+    })
+    
+    p_value <- mean(abs(permutation_diffs) >= abs(observed_diff))
+    return(p_value)
+}
+
+race_perform_FRT(resume)
+```
+
+```{r, FRT race}
+z = resume$race_numeric
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 1, 0, 100000)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+If we only run 10000 simulations, we get p-value of 0 for all the test statistics. This suggests that none of the simulated values of the test statistic (the difference in callback rates) in the null distribution are as extreme as the observed value. This might be because of the observed test statistics being too extreme, making it unlikely to observe such extreme values under the null hypothesis.
+
+Therefore, I tried to increase the number of simulations to 100000 times and got a very small p-value for the four test statistics:
+
+1.  **Difference-in-Means** P-value: 0e+00
+2.  **Studentized Statistic** P-value: 0e+00
+3.  **Wilcoxon Rank Sum** P-value: 1e-05
+4.  **Kolmogorov-Smirnov Statistic** P-value: 2e-05
+
+We can see that all the four p-values are very small, and are much smaller than significance levels (0.05). This indicates strong evidence against the null hypothesis in favor of the alternative hypothesis (there is causal effect). This suggests that the observed difference in callback rates between white and black individuals is statistically significant. This also indicates that the observed effect is not likely to have occurred by random chance alone. We have enough evidence to reject the null hypothesis that there is no difference in callback rates between white and black individuals.
+
+In summary, the small Monte Carlo p-value suggests strong evidence against the null hypothesis, indicating a statistically significant difference in callback rates between white and black individuals.
+
+# Gender and Race
+
+```{r}
+gender_and_race_perform_FRT <- function(data, a, b) {
+    observed_diff <- mean(data$received_callback[data$z == a]) - mean(data$received_callback[data$z == b])
+    permutation_diffs <- replicate(10000, {
+        shuffled_gender <- sample(data$z)
+        mean(data$received_callback[shuffled_gender == a]) - mean(data$received_callback[shuffled_gender == b])
+    })
+    
+    p_value <- mean(abs(permutation_diffs) >= abs(observed_diff))
+    return(p_value)
+}
+
+gender_and_race_perform_FRT(resume, 0, 1)
+gender_and_race_perform_FRT(resume, 0, 2)
+gender_and_race_perform_FRT(resume, 0, 3)
+gender_and_race_perform_FRT(resume, 1, 2)
+gender_and_race_perform_FRT(resume, 1, 3)
+gender_and_race_perform_FRT(resume, 2, 3)
+```
+
+```{r}
+# Compare White Female (1) and White male (0)
+z = resume$z
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 0, 1)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+Cannot reject the Fisher's null that there's no causal effect.
+
+```{r}
+# Compare White Male (0) and Black male (2)
+z = resume$z
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 0, 2)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+The result suggest that
+
+```{r}
+# Compare White Male (0) and Black Female (3)
+z = resume$z
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 0, 3)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+heyyyy
+
+```{r}
+# Compare White Female (1) and Black Male (2)
+z = resume$z
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 1, 2)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+Heyyyy
+
+```{r}
+# Compare White Female (1) and Black Female (3)
+z = resume$z
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 1, 3)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+The result suggest that
+
+```{r}
+# Compare Black Male (2) and Black Female (3)
+z = resume$z
+y = resume$received_callback
+
+result <- calculate_p_values(z, y, 2, 3)
+print(result[5])
+
+data_frame <- data.frame(
+    DiffMeans = result[1],
+    Studentized = result[2],
+    Wilcoxon = result[3],
+    KS = result[4]
+  )
+plot_distribution(data_frame)
+```
+
+In summary, all p-values are relatively high, indicating a lack of significant evidence to reject the null hypothesis in favor of a difference between groups. However, the Kolmogorov-Smirnov test has a lower p-value compared to the others, suggesting that it provides relatively stronger evidence against the null hypothesis compared to the other test statistics.
+
+After comparing all the groups, we have the result:
+
+1.  **White Female (1) and White male (0):** Do not reject fisher's null since the p-values are all higher than significant level of 0.05. This indicates that there is a lack of evidence to reject the null hypothesis whichever test statistics we are using.
+
+2.  **White Male (0) and Black male (2):** Do not reject fisher's null since the p-values are all higher than significant level of 0.05. This indicates that there is a lack of evidence to reject the null hypothesis whichever test statistics we are using. Note that KS has a p-value of 0.0602, which is just a little bit above the significance level. Since the Kolmogorov-Smirnov (KS) test is a non-parametric test used to compare the cumulative distributions of two independent samples, this suggests that there is evidence to reject the null hypothesis that the distributions of the two groups are the same.
+
+3.  White Female (1) and Black Female (3): reject null
+
+4.  Black Male (2) and Black Female (3)
+
+5.  Black Male (2) and White Female (1)
+
+6.  White Male (0) and Black Female (3)
+
+    ```         
+    0.0357 0.0366 0.0447 0.0887
+    ```
+
+|                                           | **Difference-in-Means**     | **Studentized Statistic**   | **Wilcoxon Rank Sum**       | **Kolmogorov-Smirnov Statistic** |
+|---------------|---------------|---------------|---------------|---------------|
+| **White Female (1) and White male (0)**   | 0.2402                      | 0.2403                      | 0.2207                      | 0.4307                           |
+| **White Male (0) and Black male (2)**     | 0.9759                      | 0.9759                      | 0.9727                      | 0.0598                           |
+| **White Female (1) and Black Female (3)** | \textcolor{red}{**2e-04**}  | \textcolor{red}{**2e-04**}  | \textcolor{red}{**1e-04**}  | \textcolor{red}{**1e-04**}       |
+| **Black Male (2) and Black Female (3)**   | 0.7522                      | 0.7523                      | 0.7292                      | 0.5524                           |
+| **Black Male (2) and White Female (1)**   | \textcolor{red}{**0.0010**} | \textcolor{red}{**0.0012**} | \textcolor{red}{**0.0007**} | \textcolor{red}{**0.0024**}      |
+| **White Male (0) and Black Female (3)**   | \textcolor{red}{**0.0357**} | \textcolor{red}{**0.0366**} | \textcolor{red}{**0.0447**} | 0.0887                           |
+
+: The p-values of comparisions between the combination of gender and race
+
+# Neymanian inference
+
+## Gender
+
+```{r}
+z = resume$gender_numeric
+y = resume$received_callback
+
+n1 = sum(z)
+n0 = length(z) - n1
+
+tauhat = mean(y[z==1]) - mean(y[z==0])
+vhat = var(y[z==1])/n1 + var(y[z==0])/n0
+sehat = sqrt(vhat)
+
+Z <- qnorm(0.975)
+
+lower_bound <- tauhat - Z * sehat
+upper_bound <- tauhat + Z * sehat
+
+cat('The tauhat = ', tauhat)
+cat('\nThe se hat = ', sehat)
+cat('\nThe 95% confidence interval = [', lower_bound, ', ', upper_bound, ']')
+```
+
+```{r}
+olsfit = lm(y ~ z)
+summary(olsfit)$coef[2, 1: 2]
+
+tauhat <- summary(olsfit)$coef[2, 1]
+sehat <- summary(olsfit)$coef[2, 2]
+
+Z <- qnorm(0.975)
+
+lower_bound <- tauhat - Z * sehat
+upper_bound <- tauhat + Z * sehat
+
+cat('The tauhat = ', tauhat)
+cat('\nThe SE hat = ', sehat)
+cat('\nThe 95% confidence interval = [', lower_bound, ', ', upper_bound, ']\n')
+
+library(car)
+sqrt(hccm(olsfit)[2, 2]) 
+sqrt(hccm(olsfit , type = "hc0")[2, 2])
+sqrt(hccm(olsfit , type = "hc2")[2, 2])
+```
+
+## Race
+
+```{r}
+# read data
+set.seed(0)
+
+z = resume$race_numeric
+y = resume$received_callback
+
+n1 = sum(z)
+n0 = length(z) - n1
+
+
+tauhat = mean(y[z==1]) - mean(y[z==0])
+vhat = var(y[z==1])/n1 + var(y[z==0])/n0
+sehat = sqrt(vhat)
+
+Z <- qnorm(0.975)
+
+lower_bound <- tauhat - Z * sehat
+upper_bound <- tauhat + Z * sehat
+
+cat('The tauhat = ', tauhat)
+cat('\nThe se hat = ', sehat)
+cat('\nThe 95% confidence interval = [', lower_bound, ', ', upper_bound, ']\n')
+
+olsfit = lm(y ~ z)
+summary(olsfit)$coef[2, 1: 2]
+
+tauhat <- summary(olsfit)$coef[2, 1]
+sehat <- summary(olsfit)$coef[2, 2]
+
+Z <- qnorm(0.975)
+
+lower_bound <- tauhat - Z * sehat
+upper_bound <- tauhat + Z * sehat
+
+cat('The tauhat = ', tauhat)
+cat('\nThe SE hat = ', sehat)
+cat('\nThe 95% confidence interval = [', lower_bound, ', ', upper_bound, ']\n')
+
+library(car)
+sqrt(hccm(olsfit)[2, 2]) 
+sqrt(hccm(olsfit , type = "hc0")[2, 2])
+sqrt(hccm(olsfit , type = "hc2")[2, 2])
+```
+
+## Gender and Race
+
+```{r}
+WM <- resume[resume$race_numeric == 1 & resume$gender_numeric == 1,] # White Male
+WF <- resume[resume$race_numeric == 1 & resume$gender_numeric == 0,] # White Female
+BM <- resume[resume$race_numeric == 0 & resume$gender_numeric == 1,] # Black Male
+BF <- resume[resume$race_numeric == 0 & resume$gender_numeric == 0,] # Black Female
+
+meanWM <- mean(WM$received_callback)
+meanWF <- mean(WF$received_callback)
+meanBM <- mean(BM$received_callback)
+meanBF <- mean(BF$received_callback)
+
+callbackWM <-sum(WM$received_callback)
+callbackWF <-sum(WF$received_callback)
+callbackBM <-sum(BM$received_callback)
+callbackBF <-sum(BF$received_callback)
+```
+
+# Machine-Learning based regression adjustment
+
+```{r, cross fitting}
+library(readr)
+library(tidyr)
+library(grf)
+library(estimatr)
+
+# getting data subset, Z = 1 and Z = 0
+treat <- subset(resume, resume$gender_numeric == 1)
+n1 <- nrow(treat)
+contr <- subset(resume, resume$gender_numeric == 0)
+n0 <- nrow(contr)
+
+# cross fitting
+s <- sample(n1)
+
+# getting covariate and train the random forest model
+X_1 <- model.matrix(~ 0 + female + english + factor(hsgroup) + numcourses_nov1, sfp_1_data) %>% scale(center=TRUE, scale=FALSE)
+Y_1 <- sfp_1_data$grade_20059_fall
+Z_1 <- sfp_1_data$sfp
+
+# split X_1 and Y_1 into 2 folds
+X_11 <- X_1[s[1:(n1/2)],]
+X_12 <- X_1[s[(1+(n1/2)):n1],]
+Y_11 <- Y_1[s[1:(n1/2)]]
+Y_12 <- Y_1[s[(1+(n1/2)):n1]]
+Z_11 <- Z_1[s[1:(n1/2)]]
+Z_12 <- Z_1[s[(1+(n1/2)):n1]]
+
+rf_11 <- regression_forest(X_11, Y_11)
+rf_12 <- regression_forest(X_12, Y_12)
+
+mu_12 <- predict(rf_11, newdata = X_12)$predictions
+mu_11 <- predict(rf_12, newdata = X_11)$predictions
+
+# Combine the results
+c_mu11 <- c(mu_11, mu_12)
+c_Y1 <- c(Y_11, Y_12)
+c_X1 <- c(X_11, X_12)
+c_Z1 <- c(Z_11, Z_12)
+
+# cross fitting for control group
+s0 <- sample(n0)
+X_0 <- model.matrix(~ 0 + female + english + factor(hsgroup) + numcourses_nov1, sfp_0_data) %>% scale(center=TRUE, scale=FALSE)
+Y_0 <- sfp_0_data$grade_20059_fall
+Z_0 <- sfp_0_data$sfp
+
+# split X_0 and Y_0 into 2 folds
+X_01 <- X_0[s0[1:(n0/2)],]
+X_02 <- X_0[s0[(1+(n0/2)):n0],]
+Y_01 <- Y_0[s0[1:(n0/2)]]
+Y_02 <- Y_0[s0[(1+(n0/2)):n0]]
+Z_01 <- Z_0[s0[1:(n0/2)]]
+Z_02 <- Z_0[s0[(1+(n0/2)):n0]]
+
+rf_01 <- regression_forest(X_01, Y_01)
+rf_02 <- regression_forest(X_02, Y_02)
+
+mu_02 <- predict(rf_01, newdata = X_02)$predictions
+mu_01 <- predict(rf_02, newdata = X_01)$predictions
+
+# Combine the results
+c_mu00 <- c(mu_01, mu_02)
+c_Y0 <- c(Y_01, Y_02)
+c_X0 <- c(X_01, X_02)
+c_Z0 <- c(Z_01, Z_02)
+
+# mu_01: use X_1 data as new data for random forest trained on mu_0
+mu_011 <- predict(rf_11, newdata = X_01)$predictions
+mu_012 <- predict(rf_12, newdata = X_02)$predictions
+c_mu01 <- c(mu_011, mu_012)
+
+mu_101 <- predict(rf_01, newdata = X_11)$predictions
+mu_102 <- predict(rf_02, newdata = X_12)$predictions
+c_mu10 <- c(mu_101, mu_102)
+
+mu_1 <- c(c_mu11, c_mu01)
+mu_0 <- c(c_mu00, c_mu10)
+c_z <- c(c_Z1, c_Z0)
+c_Y <- c(c_Y1, c_Y0)
+
+# calibration
+# Z <- sfp_data$sfp
+mu_1_tild <- mu_1 + sum(c_z*(c_Y-mu_1))/n1
+mu_0_tild <- mu_0 + sum((1-c_z)*(c_Y-mu_0))/n0
+
+est_pred <- (sum(Y_1)+sum((1-c_z)*mu_1_tild))/n - (sum(c_z*mu_0_tild) + sum(Y_0))/n
+
+# confidence interval
+sigma_squared_1 <- sum(c_z*(c_Y - mu_1_tild)^2)/(n1-1)
+sigma_squared_0 <- sum((1-c_z)*(c_Y - mu_0_tild)^2)/(n0-1)
+sigma_squared_tao <- sum((mu_1_tild - mu_0_tild - mean(mu_1_tild) + mean(mu_0_tild))^2)/(n-1)
+V_hat_pred <- sigma_squared_1/n1 + sigma_squared_0/n0 + sigma_squared_tao/n
+
+z <- qnorm(0.975)
+SE_tao_hat <- sqrt(V_hat_pred)
+
+lower_bound <- est_pred - z * SE_tao_hat
+upper_bound <- est_pred + z * SE_tao_hat
+
+cat('The 95% confidence interval for sfp= [', lower_bound, ', ', upper_bound, ']')OL
+```
+
+# **Reason why this is a crt**
+
+# **AIPW**
